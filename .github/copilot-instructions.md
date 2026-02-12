@@ -445,8 +445,6 @@ ctx.router.postNoAuth('/endpoint', handler);
 // 静态文件 → /plugin/<plugin-id>/files/<urlPath>/
 ctx.router.static('/static', 'webui');
 
-// 页面注册 → /plugin/<plugin-id>/page/<path>
-//ctx.router.page({ path: 'dashboard', title: '面板', htmlFile: 'webui/index.html' });
 
 // 内存静态文件 → /plugin/<plugin-id>/mem/<urlPath>/
 ctx.router.staticOnMem('/dynamic', [{ path: '/config.json', content: '{}', contentType: 'application/json' }]);
