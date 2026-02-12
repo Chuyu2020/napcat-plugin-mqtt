@@ -169,7 +169,7 @@ pnpm run typecheck
 
 # 完整构建（自动构建 WebUI 前端 + 后端 + 资源复制，一步完成）
 pnpm run build
-# 输出: dist/index.mjs + dist/package.json + dist/webui/
+# 输出: index.mjs + package.json 
 
 # WebUI 前端开发服务器（实时预览，推荐纯前端开发时使用）
 pnpm run dev:webui
@@ -268,7 +268,7 @@ debug> ping              # 心跳测试
 ### ESM 模块规范
 
 - `package.json` 中 `type: "module"`
-- Vite 打包输出为 `dist/index.mjs`
+- Vite 打包输出为 `index.mjs`
 
 ### 类型导入
 
