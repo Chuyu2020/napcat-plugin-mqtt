@@ -442,8 +442,6 @@ ctx.router.post('/endpoint', handler);
 ctx.router.getNoAuth('/endpoint', handler);
 ctx.router.postNoAuth('/endpoint', handler);
 
-// 静态文件 → /plugin/<plugin-id>/files/<urlPath>/
-ctx.router.static('/static', 'webui');
 
 
 // 内存静态文件 → /plugin/<plugin-id>/mem/<urlPath>/

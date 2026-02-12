@@ -18,7 +18,7 @@
             "工具"
         ],
         "minVersion": "4.14.0",
-        "homepage": ""
+        "homepage": "https://github.com/Chuyu2020/napcat-plugin-mqtt"
     },
     "dependencies": {
         "mqtt": "^5.15.0",
