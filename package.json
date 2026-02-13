@@ -1,6 +1,6 @@
 {
     "name": "napcat-plugin-mqtt",
-    "plugin": "Napcat_Plugin_MQTT",
+    "plugin": "mqtt插件",
     "version": "1.0.0",
     "type": "module",
     "main": "index.mjs",
