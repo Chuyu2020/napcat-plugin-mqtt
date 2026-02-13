@@ -169,7 +169,7 @@ pnpm run typecheck
 
 # 完整构建（自动构建 WebUI 前端 + 后端 + 资源复制，一步完成）
 pnpm run build
-# 输出: index.mjs + package.json 
+# 输出: dist/index.mjs + dist/package.json + dist/webui/
 
 # WebUI 前端开发服务器（实时预览，推荐纯前端开发时使用）
 pnpm run dev:webui
