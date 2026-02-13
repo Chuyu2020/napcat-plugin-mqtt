@@ -73,7 +73,7 @@ jobs:
 
           # 进入临时目录并压缩
           cd release
-          zip -r ../${PLUGIN_NAME}.zip index.mjs package.json webui
+          zip -r ../${PLUGIN_NAME}.zip index.mjs package.json
 
       - name: Verify zip contents
         run: |
