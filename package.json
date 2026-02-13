@@ -32,6 +32,6 @@
         "vite": "^6.0.0"
     },
     "scripts": {
-    "build": "pnpm run build"
+    "build": "echo \"No build needed\""
   }
 }
