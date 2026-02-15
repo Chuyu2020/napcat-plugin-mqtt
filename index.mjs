@@ -6,13 +6,6 @@
 
 import mqtt from 'mqtt';
 
-
-// 当前连接的Broker URL
-let currentBrokerUrl = '';
-
-// MQTT 客户端实例，初始值为null
-let client = null;
-
 // 全局上下文，用于在MQTT消息回调中发送消息
 let globalCtx = null;
 
@@ -25,7 +18,7 @@ const topicToUsers = new Map();
 /**
  * 用户上下文管理
  * 为每个私聊用户维护独立的MQTT操作状态，实现用户间隔离
- * @type {Map<string, {userId: string, subscribedTopics: Set<string>, lastCommand: string, commandTime: number}>}
+ * @type {Map<string, {userId: string, client: object|null, brokerUrl: string, subscribedTopics: Set<string>, lastCommand: string, commandTime: number}>}
  */
 const userContextMap = new Map();
 
@@ -38,6 +31,8 @@ function getUserContext(userId) {
   if (!userContextMap.has(userId)) {
     userContextMap.set(userId, {
       userId: userId,
+      client: null,
+      brokerUrl: '',
       subscribedTopics: new Set(),
       lastCommand: '',
       commandTime: 0,
@@ -53,6 +48,11 @@ function getUserContext(userId) {
  */
 function clearUserContext(userId) {
   if (userContextMap.has(userId)) {
+    const userContext = userContextMap.get(userId);
+    // 关闭用户的 MQTT 连接
+    if (userContext.client && userContext.client.connected) {
+      userContext.client.end(false);
+    }
     userContextMap.delete(userId);
   }
 }
@@ -66,52 +66,35 @@ const plugin_get_config = async (ctx) => {
   ctx.logger.log('触发plugin_get_config');
 };
 
-/**
- * 设置MQTT客户端事件监听器
- */
-function setupMQTTEventListeners(ctx) {
-  // 处理连接成功事件
-  client.on('connect', () => {
-    ctx.logger.log('成功连接到MQTT服务器');
-  });
-}
+
 
 /**
  * 处理MQTT消息并转发给订阅的用户
+ * @param {string} userId - 用户ID
  * @param {string} topic - 消息主题
  * @param {Buffer} messageBuffer - 消息内容
  */
-async function handleMQTTMessage(topic, messageBuffer) {
+async function handleMQTTMessage(userId, topic, messageBuffer) {
   if (!globalCtx) {
     return;
   }
 
   try {
     const messageStr = messageBuffer.toString();
-    globalCtx.logger.info(`[MQTT] 收到消息 [${topic}]: ${messageStr}`);
-
-    // 查找订阅了该主题的所有用户
-    if (!topicToUsers.has(topic)) {
-      globalCtx.logger.info(`[MQTT] 主题 ${topic} 没有订阅者`);
-      return;
-    }
-
-    const userIds = topicToUsers.get(topic);
+    globalCtx.logger.info(`[用户${userId}] 收到消息 [${topic}]: ${messageStr}`);
     
-    // 为每个订阅了该主题的用户发送私聊消息
-    for (const userId of userIds) {
-      try {
-        const sendParams = {
-          message: `📨 [${topic}]:\n${messageStr}`,
-          message_type: 'private',
-          user_id: userId,
-        };
+    // 发送私聊消息给该用户
+    try {
+      const sendParams = {
+        message: `📨 [${topic}]:\n${messageStr}`,
+        message_type: 'private',
+        user_id: userId,
+      };
 
-        await globalCtx.actions.call('send_msg', sendParams, globalCtx.adapterName, globalCtx.pluginManager.config);
-        globalCtx.logger.info(`[MQTT] 已转发消息给用户 ${userId}`);
-      } catch (error) {
-        globalCtx.logger.error(`[MQTT] 转发消息给用户 ${userId} 失败:`, error);
-      }
+      await globalCtx.actions.call('send_msg', sendParams, globalCtx.adapterName, globalCtx.pluginManager.config);
+      globalCtx.logger.info(`[MQTT] 已转发消息给用户 ${userId}`);
+    } catch (error) {
+      globalCtx.logger.error(`[MQTT] 转发消息给用户 ${userId} 失败:`, error);
     }
   } catch (error) {
     globalCtx.logger.error('[MQTT] 处理消息时出错:', error);
@@ -198,9 +181,10 @@ const plugin_onmessage = async (ctx, event) => {
         // 格式: #mqtt connect <broker_url> [username] [password]
         // 例如: #mqtt connect mqtt://mqtt.example.com:1883 user pass
         
-        if (client && client.connected) {
-          responseMessage = '⚠️ 已经连接到MQTT服务器，请勿重复连接';
-          break;
+        // 每次 connect 都创建新连接，如果已有连接则先断开
+        if (userContext.client && userContext.client.connected) {
+          userContext.client.end(false);
+          ctx.logger.info(`[用户${userId}] 断开旧连接，准备建立新连接`);
         }
 
         if (args.length === 0) {
@@ -239,36 +223,32 @@ const plugin_onmessage = async (ctx, event) => {
           }
 
           // 创建新的客户端连接
-          if (client) {
-            client.end(false);
-          }
-
-          client = mqtt.connect(brokerUrlInput, connectOptions);
-          currentBrokerUrl = brokerUrlInput;
-          // setupMQTTEventListeners(ctx);
+          userContext.client = mqtt.connect(brokerUrlInput, connectOptions);
+          userContext.brokerUrl = brokerUrlInput;
+          
           // 处理连接成功事件
-          client.on('connect', () => {
-            ctx.logger.log('成功连接到MQTT服务器');
+          userContext.client.on('connect', () => {
+            ctx.logger.log(`[用户${userId}] 成功连接到MQTT服务器`);
           });
 
           // 监听消息接收事件
-          client.on('message', (topic, message) => {
-            handleMQTTMessage(topic, message);
+          userContext.client.on('message', (topic, message) => {
+            handleMQTTMessage(userId, topic, message);
           });
 
           // 监听错误事件
-          client.on('error', (error) => {
-            ctx.logger.error('MQTT错误:', error);
+          userContext.client.on('error', (error) => {
+            ctx.logger.error(`[用户${userId}] MQTT错误:`, error);
           });
 
           // 监听连接关闭事件
-          client.on('close', () => {
-            ctx.logger.info('连接已断开');
+          userContext.client.on('close', () => {
+            ctx.logger.info(`[用户${userId}] 连接已断开`);
           });
 
           // 监听重连事件
-          client.on('reconnect', () => {
-            ctx.logger.info('正在重新连接...');
+          userContext.client.on('reconnect', () => {
+            ctx.logger.info(`[用户${userId}] 正在重新连接...`);
           });
           userContext.lastCommand = 'connect';
           userContext.commandTime = Date.now();
@@ -286,18 +266,26 @@ const plugin_onmessage = async (ctx, event) => {
 
       case 'disconnect': {
         // 断开MQTT服务器连接
-        if (!client || !client.connected) {
+        if (!userContext.client || !userContext.client.connected) {
           responseMessage = '⚠️ MQTT服务器未连接或已断开';
           break;
         }
 
-        client.end(false, () => {
-          ctx.logger.info('MQTT连接已断开');
+        userContext.client.end(false, () => {
+          ctx.logger.info(`[用户${userId}] MQTT连接已断开`);
         });
 
-        currentBrokerUrl = '';
-        // 清空topic到用户的映射
-        topicToUsers.clear();
+        userContext.brokerUrl = '';
+        // 清空该用户订阅的主题
+        userContext.subscribedTopics.forEach(topic => {
+          if (topicToUsers.has(topic)) {
+            topicToUsers.get(topic).delete(userId);
+            if (topicToUsers.get(topic).size === 0) {
+              topicToUsers.delete(topic);
+            }
+          }
+        });
+        userContext.subscribedTopics.clear();
         
         userContext.lastCommand = 'disconnect';
         userContext.commandTime = Date.now();
@@ -311,7 +299,7 @@ const plugin_onmessage = async (ctx, event) => {
         // 格式: #mqtt publish <topic> <message...>
         
         // 检查连接状态
-        if (!client || !client.connected) {
+        if (!userContext.client || !userContext.client.connected) {
           responseMessage = '❌ MQTT服务器未连接，请先使用 #mqtt connect 连接';
           break;
         }
@@ -324,7 +312,7 @@ const plugin_onmessage = async (ctx, event) => {
         const topic = args[0];
         const message = args.slice(1).join(' ');
 
-        client.publish(topic, message, { qos: 0, retain: false }, (err) => {
+        userContext.client.publish(topic, message, { qos: 0, retain: false }, (err) => {
           if (err) {
             ctx.logger.error(`[用户${userId}] 发布到主题 ${topic} 失败:`, err);
           } else {
@@ -344,7 +332,7 @@ const plugin_onmessage = async (ctx, event) => {
         // 格式: #mqtt subscribe <topic>
         
         // 检查连接状态
-        if (!client || !client.connected) {
+        if (!userContext.client || !userContext.client.connected) {
           responseMessage = '❌ MQTT服务器未连接，请先使用 #mqtt connect 连接';
           break;
         }
@@ -362,7 +350,7 @@ const plugin_onmessage = async (ctx, event) => {
           break;
         }
 
-        client.subscribe(topic, { qos: 0 }, (error, granted) => {
+        userContext.client.subscribe(topic, { qos: 0 }, (error, granted) => {
           if (error) {
             ctx.logger.error(`[用户${userId}] 订阅主题 ${topic} 失败:`, error);
           } else {
@@ -390,7 +378,7 @@ const plugin_onmessage = async (ctx, event) => {
         // 格式: #mqtt unsubscribe <topic>
         
         // 检查连接状态
-        if (!client || !client.connected) {
+        if (!userContext.client || !userContext.client.connected) {
           responseMessage = '❌ MQTT服务器未连接，请先使用 #mqtt connect 连接';
           break;
         }
@@ -408,7 +396,7 @@ const plugin_onmessage = async (ctx, event) => {
           break;
         }
 
-        client.unsubscribe(topic, (error) => {
+        userContext.client.unsubscribe(topic, (error) => {
           if (error) {
             ctx.logger.error(`[用户${userId}] 取消订阅主题 ${topic} 失败:`, error);
           } else {
@@ -437,14 +425,14 @@ const plugin_onmessage = async (ctx, event) => {
 
       case 'status': {
         // 显示连接状态
-        const status = client && client.connected ? '✅ 已连接' : '❌ 未连接';
+        const status = userContext.client && userContext.client.connected ? '✅ 已连接' : '❌ 未连接';
         const topicList = userContext.subscribedTopics.size > 0 
           ? Array.from(userContext.subscribedTopics).join('\n  • ') 
           : '(无)';
         
         responseMessage = `📊 MQTT状态:\n` +
           `连接状态: ${status}\n` +
-          `Broker: ${currentBrokerUrl || '未设置'}\n` +
+          `Broker: ${userContext.brokerUrl || '未设置'}\n` +
           `您的已订阅主题: ${userContext.subscribedTopics.size}\n  • ${topicList}\n` +
           `您的操作统计: ${userContext.operationCount} 次`;
         break;
@@ -486,7 +474,7 @@ const plugin_onmessage = async (ctx, event) => {
         // 清空用户的所有订阅
         
         // 检查连接状态
-        if (!client || !client.connected) {
+        if (!userContext.client || !userContext.client.connected) {
           responseMessage = '❌ MQTT服务器未连接，请先使用 #mqtt connect 连接';
           break;
         }
@@ -499,7 +487,7 @@ const plugin_onmessage = async (ctx, event) => {
         const topicsToUnsubscribe = Array.from(userContext.subscribedTopics);
         const unsubscribePromises = topicsToUnsubscribe.map(topic => 
           new Promise((resolve) => {
-            client.unsubscribe(topic, (error) => {
+            userContext.client.unsubscribe(topic, (error) => {
               if (!error) {
                 userContext.subscribedTopics.delete(topic);
                 
@@ -566,22 +554,22 @@ const plugin_onmessage = async (ctx, event) => {
 const plugin_cleanup = async (ctx) => {
   ctx.logger.log('触发plugin_cleanup');
   try {
+    // 关闭所有用户的 MQTT 连接
+    for (const [userId, userContext] of userContextMap.entries()) {
+      if (userContext.client && userContext.client.connected) {
+        ctx.logger.info(`正在关闭用户 ${userId} 的MQTT连接...`);
+        userContext.client.end(false, () => {
+          ctx.logger.info(`用户 ${userId} 的MQTT连接已关闭`);
+        });
+      }
+    }
+    
     // 清理用户上下文
     userContextMap.clear();
     
     // 清空topic到用户的映射
     topicToUsers.clear();
     
-    // 清空broker URL
-    currentBrokerUrl = '';
-    
-    // 优雅地关闭MQTT客户端
-    if (client && client.connected) {
-      ctx.logger.info('正在关闭MQTT连接...');
-      client.end(false, () => {
-        ctx.logger.info('MQTT连接已关闭');
-      });
-    }
     ctx.logger.info("info", "插件已卸载");
   } catch (e) {
     // 捕获卸载过程中的异常
